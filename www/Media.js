@@ -57,6 +57,7 @@ Media.MEDIA_STATE = 1;
 Media.MEDIA_DURATION = 2;
 Media.MEDIA_POSITION = 3;
 Media.MEDIA_ERROR = 9;
+Media.MEDIA_VOLUME_CHANGE = 10;
 
 // Media states
 Media.MEDIA_NONE = 0;
@@ -255,6 +256,21 @@ Media.onStatus = function (id, msgType, value) {
             break;
         case Media.MEDIA_POSITION:
             media._position = Number(value);
+            break;
+        case Media.MEDIA_VOLUME_CHANGE:
+            // Disparar un evento personalizado con el nuevo volumen
+            var volumeChangeEvent = new CustomEvent('volumechange', { 
+                detail: { 
+                    id: id, 
+                    volume: Number(value) 
+                } 
+            });
+            document.dispatchEvent(volumeChangeEvent);
+            
+            // También llamar al callback de estado si está definido
+            if (media.statusCallback) {
+                media.statusCallback({ type: 'volumechange', volume: Number(value) });
+            }
             break;
         default:
             if (console.error) {

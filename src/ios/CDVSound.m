@@ -29,7 +29,7 @@
 
 BOOL keepAvAudioSessionAlwaysActive = NO;
 
-@synthesize soundCache, avSession, currMediaId, statusCallbackId;
+@synthesize soundCache, avSession, currMediaId, statusCallbackId, previousVolume;
 
 -(void) pluginInitialize
 {
@@ -42,6 +42,34 @@ BOOL keepAvAudioSessionAlwaysActive = NO;
                 NSLog(@"Unable to activate session: %@", [error localizedFailureReason]);
             }
         }
+    }
+    
+    // Inicializar el volumen previo con el actual
+    self.previousVolume = [AVAudioSession sharedInstance].outputVolume;
+    
+    // Registrarse para notificaciones de cambio de volumen del sistema
+    [[NSNotificationCenter defaultCenter] addObserver:self 
+                                             selector:@selector(audioVolumeChanged:) 
+                                                 name:@"AVSystemController_SystemVolumeDidChangeNotification" 
+                                               object:nil];
+}
+
+- (void)audioVolumeChanged:(NSNotification *)notification
+{
+    // Obtener el volumen actual
+    float currentVolume = [AVAudioSession sharedInstance].outputVolume;
+    
+    // Verificar si el volumen ha cambiado realmente
+    if (currentVolume != self.previousVolume) {
+        // Almacenar el nuevo volumen como el previo para la próxima comparación
+        self.previousVolume = currentVolume;
+        
+        // Enviar evento de cambio de volumen - se envía a todos los medios activos
+        if (self.currMediaId) {
+            [self onStatus:MEDIA_VOLUME_CHANGE mediaId:self.currMediaId param:@(currentVolume)];
+        }
+        
+        NSLog(@"Volume changed to: %f", currentVolume);
     }
 }
 
@@ -865,6 +893,11 @@ BOOL keepAvAudioSessionAlwaysActive = NO;
 
 - (void)dealloc
 {
+    // Eliminar la observación de cambios de volumen
+    [[NSNotificationCenter defaultCenter] removeObserver:self 
+                                                    name:@"AVSystemController_SystemVolumeDidChangeNotification" 
+                                                  object:nil];
+    
     [[self soundCache] removeAllObjects];
 }
 
