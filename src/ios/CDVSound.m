@@ -29,7 +29,7 @@
 
 BOOL keepAvAudioSessionAlwaysActive = NO;
 
-@synthesize soundCache, avSession, currMediaId, statusCallbackId, previousVolume;
+@synthesize soundCache, avSession, currMediaId, statusCallbackId, previousVolume, volumeObserver;
 
 -(void) pluginInitialize
 {
@@ -59,30 +59,71 @@ BOOL keepAvAudioSessionAlwaysActive = NO;
 {
     NSLog(@"Setting up volume observation");
     
-    // Configuramos la sesión para que nos envíe notificaciones correctamente
+    // Asegurar que tenemos una sesión de audio
     if (![self hasAudioSession]) {
         self.avSession = [AVAudioSession sharedInstance];
     }
     
-    // Usar múltiples métodos de observación para asegurar compatibilidad
+    // Inicializar el volumen previo con el actual
+    self.previousVolume = [AVAudioSession sharedInstance].outputVolume;
     
-    // 1. Observador de notificaciones de outputVolumeChanged
-    [[NSNotificationCenter defaultCenter] addObserver:self 
-                                             selector:@selector(audioVolumeChanged:) 
-                                                 name:AVAudioSessionOutputVolumeDidChangeNotification
-                                               object:nil];
+    // Usar KVO para observar cambios en el volumen de salida (más confiable)
+    [[AVAudioSession sharedInstance] addObserver:self 
+                                     forKeyPath:@"outputVolume" 
+                                        options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionOld
+                                        context:NULL];
+    self.volumeObserver = @YES; // Solo para marcar que estamos observando
     
-    // 2. Observador para SystemVolumeDidChangeNotification (alternativa)
+    // Observador para SystemVolumeDidChangeNotification (método alternativo/adicional)
     [[NSNotificationCenter defaultCenter] addObserver:self 
                                              selector:@selector(audioVolumeChanged:) 
                                                  name:@"AVSystemController_SystemVolumeDidChangeNotification" 
                                                object:nil];
     
-    // 3. Activar notificaciones de cambio de volumen en la sesión de audio
+    // Activar la sesión de audio para asegurar que recibimos notificaciones de volumen
     NSError *error = nil;
     BOOL success = [[AVAudioSession sharedInstance] setActive:YES error:&error];
     if (!success) {
         NSLog(@"Error setting AVAudioSession active: %@", [error localizedDescription]);
+    }
+    
+    NSLog(@"Volume observation setup complete, initial volume: %f", self.previousVolume);
+}
+
+// Método para recibir notificaciones KVO de cambios en propiedades observadas
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context
+{
+    if ([keyPath isEqualToString:@"outputVolume"]) {
+        float newVolume = [[AVAudioSession sharedInstance] outputVolume];
+        // Reportar el cambio si es significativo
+        if (fabsf(newVolume - self.previousVolume) > 0.01) {
+            NSLog(@"KVO detected volume change from %f to %f", self.previousVolume, newVolume);
+            self.previousVolume = newVolume;
+            [self reportVolumeChange:newVolume];
+        }
+    }
+}
+
+// Método centralizado para reportar cambios de volumen
+- (void)reportVolumeChange:(float)newVolume
+{
+    // Obtener el ID de media activo
+    NSString *mediaIdToNotify = self.currMediaId;
+    
+    // Si no hay media actual pero hay elementos en el cache, notificar al primero
+    if (!mediaIdToNotify && [self.soundCache count] > 0) {
+        mediaIdToNotify = [[self.soundCache allKeys] firstObject];
+    }
+    
+    // Enviar evento de cambio de volumen
+    if (mediaIdToNotify) {
+        // Usar dispatch_async para asegurar que el evento se procese en el hilo principal
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self onStatus:MEDIA_VOLUME_CHANGE mediaId:mediaIdToNotify param:@(newVolume)];
+            NSLog(@"Sent MEDIA_VOLUME_CHANGE event to mediaId: %@, volume: %f", mediaIdToNotify, newVolume);
+        });
+    } else {
+        NSLog(@"No media ID available to send volume change notification");
     }
 }
 
@@ -91,31 +132,16 @@ BOOL keepAvAudioSessionAlwaysActive = NO;
     // Obtener el volumen actual
     float currentVolume = [AVAudioSession sharedInstance].outputVolume;
     
+    // Registrar la notificación recibida para depuración
+    NSLog(@"Received volume change notification, current volume: %f", currentVolume);
+    
     // Verificar si el volumen ha cambiado realmente (con una pequeña tolerancia para evitar problemas de precisión)
     if (fabsf(currentVolume - self.previousVolume) > 0.01) {
         NSLog(@"Volume changed from %f to %f", self.previousVolume, currentVolume);
         
-        // Almacenar el nuevo volumen como el previo para la próxima comparación
+        // Actualizar volumen previo y reportar el cambio
         self.previousVolume = currentVolume;
-        
-        // Obtener el ID de media activo
-        NSString *mediaIdToNotify = self.currMediaId;
-        
-        // Si no hay media actual pero hay elementos en el cache, notificar al primero
-        if (!mediaIdToNotify && [self.soundCache count] > 0) {
-            mediaIdToNotify = [[self.soundCache allKeys] firstObject];
-        }
-        
-        // Enviar evento de cambio de volumen
-        if (mediaIdToNotify) {
-            // Usar dispatch_async para asegurar que el evento se procese en el hilo principal
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self onStatus:MEDIA_VOLUME_CHANGE mediaId:mediaIdToNotify param:@(currentVolume)];
-                NSLog(@"Sent MEDIA_VOLUME_CHANGE event to mediaId: %@, volume: %f", mediaIdToNotify, currentVolume);
-            });
-        } else {
-            NSLog(@"No media ID available to send volume change notification");
-        }
+        [self reportVolumeChange:currentVolume];
     }
 }
 
@@ -941,6 +967,12 @@ BOOL keepAvAudioSessionAlwaysActive = NO;
 {
     // Eliminar todas las observaciones de notificaciones
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    
+    // Quitar el observador KVO para el volumen
+    if (self.volumeObserver) {
+        [[AVAudioSession sharedInstance] removeObserver:self forKeyPath:@"outputVolume"];
+        self.volumeObserver = nil;
+    }
     
     [[self soundCache] removeAllObjects];
 }

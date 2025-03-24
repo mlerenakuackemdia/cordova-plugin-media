@@ -91,12 +91,14 @@ typedef NSUInteger CDVMediaMsg;
     AVPlayer* avPlayer;
     NSString* statusCallbackId;
     float previousVolume;
+    id volumeObserver;
 }
 @property (nonatomic, strong) NSMutableDictionary* soundCache;
 @property (nonatomic, strong) AVAudioSession* avSession;
 @property (nonatomic, strong) NSString* currMediaId;
 @property (nonatomic, strong) NSString* statusCallbackId;
 @property (nonatomic, assign) float previousVolume;
+@property (nonatomic, strong) id volumeObserver;
 
 - (void)startPlayingAudio:(CDVInvokedUrlCommand*)command;
 - (void)pausePlayingAudio:(CDVInvokedUrlCommand*)command;
