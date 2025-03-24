@@ -224,6 +224,35 @@ Media.prototype.getCurrentAmplitude = function (success, fail) {
 };
 
 /**
+ * Set a callback to be triggered on volume change events.
+ * @param {Function} callback Function that will be called with the new volume value when volume changes.
+ */
+Media.prototype.onVolumeChange = function (callback) {
+    if (typeof callback !== 'function') {
+        console.error('onVolumeChange requires a valid function as callback');
+        return;
+    }
+    this.volumeChangeCallback = callback;
+    console.log('Volume change callback registered for media ' + this.id);
+    
+    // Devolver un objeto que permite eliminar el listener
+    var self = this;
+    return {
+        remove: function() {
+            self.volumeChangeCallback = null;
+        }
+    };
+};
+
+/**
+ * Get the current volume (only valid after a volume change event).
+ * @return {Number} Current volume between 0.0 and 1.0, or -1 if unknown.
+ */
+Media.prototype.getVolume = function () {
+    return typeof this._volume !== 'undefined' ? this._volume : -1;
+};
+
+/**
  * Audio has status update.
  * PRIVATE
  *
@@ -258,18 +287,45 @@ Media.onStatus = function (id, msgType, value) {
             media._position = Number(value);
             break;
         case Media.MEDIA_VOLUME_CHANGE:
-            // Disparar un evento personalizado con el nuevo volumen
-            var volumeChangeEvent = new CustomEvent('volumechange', { 
-                detail: { 
-                    id: id, 
-                    volume: Number(value) 
-                } 
-            });
-            document.dispatchEvent(volumeChangeEvent);
+            console.log('Received volume change event: ' + value + ' for media id: ' + id);
             
-            // También llamar al callback de estado si está definido
+            // Actualizar propiedad del objeto media
+            media._volume = Number(value);
+            
+            // Método 1: Disparar evento DOM - disponible para todos los listeners
+            try {
+                var volumeChangeEvent = new CustomEvent('mediavolume', { 
+                    bubbles: true,
+                    cancelable: false,
+                    detail: { 
+                        id: id, 
+                        volume: Number(value) 
+                    } 
+                });
+                document.dispatchEvent(volumeChangeEvent);
+                console.log('Dispatched mediavolume event to document');
+                
+                // También emitir en window para asegurar compatibilidad
+                window.dispatchEvent(volumeChangeEvent);
+            } catch (e) {
+                console.error('Error dispatching volumechange event: ' + e.message);
+            }
+            
+            // Método 2: Llamar al callback de estado del objeto media específico
             if (media.statusCallback) {
-                media.statusCallback({ type: 'volumechange', volume: Number(value) });
+                var volumeInfo = { 
+                    type: 'volumechange', 
+                    volume: Number(value),
+                    mediaId: id
+                };
+                media.statusCallback(volumeInfo);
+                console.log('Called statusCallback with volume info');
+            }
+            
+            // Método 3: Disparar evento en el objeto media (específico para este objeto)
+            if (typeof media.volumeChangeCallback === 'function') {
+                media.volumeChangeCallback(Number(value));
+                console.log('Called volumeChangeCallback');
             }
             break;
         default:
